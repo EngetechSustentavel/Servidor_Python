@@ -10,16 +10,16 @@ app = Flask(__name__)
 CORS(app)
 
 # --- CONFIGURAÇÃO DE COORDENADAS (SIRGAS 2000 / UTM 24S) ---
-# Usamos EPSG:4674 para SIRGAS 2000 Geográfico e EPSG:31984 para UTM 24S
+# Usamos EPSG:4674 para SIRGAS 2000 Geográfico e EPSG:31984 para UTM 24S (Bahia/Nordeste)
 transformer = Transformer.from_crs("epsg:4674", "epsg:31984", always_xy=True)
 
 def converter_para_utm(lat, lon):
     try:
         return transformer.transform(lon, lat)
-    except:
+    except Exception:
         return None
 
-# --- ROTA 1: GEOCONVERTER (FERRAMENTA 100% OK) ---
+# --- ROTA 1: GEOCONVERTER (FERRAMENTA DE CONVERSÃO DE DXF) ---
 @app.route('/convert', methods=['POST'])
 def convert():
     if 'dxf_file' not in request.files:
@@ -35,6 +35,7 @@ def convert():
         msp_in = doc_in.modelspace()
         doc_out = ezdxf.new('R2010')
         
+        # DEFINIÇÃO DO BLOCO SIG_PONTO
         blk = doc_out.blocks.new(name='SIG_PONTO')
         blk.add_circle((0, 0), radius=0.2)
         blk.add_line((-0.3, 0), (0.3, 0))
@@ -67,34 +68,34 @@ def convert():
         doc_out.saveas(output_path)
         return send_file(output_path, as_attachment=True, download_name="Engetech_Convertido.dxf")
     except Exception as e:
-        return f"Erro: {str(e)}", 500
+        return f"Erro no Geoconverter: {str(e)}", 500
     finally:
         if os.path.exists(input_path): os.remove(input_path)
 
-# --- ROTA 2: GEOEXTRATOR (NOVA FERRAMENTA) ---
+# --- ROTA 2: GEOEXTRATOR (EXTRAÇÃO DE TEXTO PARA POLIGONAL CAD) ---
 @app.route('/extract_text', methods=['POST'])
 def extract_text():
     data = request.get_json()
     texto = data.get('texto', '')
     
-    # Busca por pares de números (UTM ou Lat/Long)
+    # REGEX FLEXÍVEL: Captura números formatados (1.234.567,89 ou -14.1234)
     padrao = re.findall(r"(-?\d[\d\.]*?\d,\d+|-?\d+\.\d+)", texto)
     
     vertices = []
     temp_coords = []
     
     for num in padrao:
-        # Normaliza: remove pontos de milhar e troca vírgula por ponto decimal
+        # Normaliza para o padrão Python (float)
         limpo = float(num.replace('.', '').replace(',', '.')) if ',' in num else float(num)
         temp_coords.append(limpo)
     
-    # Agrupa em pares X e Y
+    # Agrupa em pares (X, Y)
     for i in range(0, len(temp_coords) - 1, 2):
         x, y = temp_coords[i], temp_coords[i+1]
         
-        # Se for Lat/Long (números pequenos), converte para UTM
+        # Se for Lat/Long (valores pequenos), converte para UTM SIRGAS 2000
         if abs(x) < 180 and abs(y) < 180:
-            utm = converter_para_utm(x, y) # lat, lon
+            utm = converter_para_utm(x, y) # assume x=lat, y=lon
             if utm: vertices.append(utm)
         else:
             vertices.append((x, y))
@@ -103,19 +104,25 @@ def extract_text():
         return "Erro: Nenhuma coordenada identificada no texto.", 400
 
     output_path = "Engetech_Extracao.dxf"
+    # Criamos o DXF forçando R2010 e declarando Layers para evitar erro de abertura
     doc = ezdxf.new('R2010')
+    doc.layers.new('POLIGONAL_ENGETECH', dxfattribs={'color': 1}) # Vermelho
+    doc.layers.new('VERTICES', dxfattribs={'color': 2})           # Amarelo
+    
     msp = doc.modelspace()
     
-    # Desenha a poligonal e identifica os vértices
-    msp.add_lwpolyline(vertices, dxfattribs={'closed': True, 'layer': 'POLIGONAL_ENGETECH', 'color': 1})
+    # Adiciona a poligonal fechada
+    msp.add_lwpolyline(vertices, dxfattribs={'closed': True, 'layer': 'POLIGONAL_ENGETECH'})
     
+    # Adiciona identificação nos vértices
     for i, v in enumerate(vertices):
-        msp.add_circle(v, radius=1.0, dxfattribs={'layer': 'VERTICES'})
-        msp.add_text(f"V{i+1}", dxfattribs={'height': 1.5}).set_placement(v)
+        msp.add_circle(v, radius=0.8, dxfattribs={'layer': 'VERTICES'})
+        txt = msp.add_text(f"V{i+1}", dxfattribs={'height': 1.2, 'layer': 'VERTICES'})
+        txt.set_placement((v[0] + 0.5, v[1] + 0.5))
     
     doc.saveas(output_path)
-    return send_file(output_path, as_attachment=True, download_name="Engetech_Poligonal.dxf")
+    return send_file(output_path, as_attachment=True, download_name="Engetech_Poligonal_Extraida.dxf")
 
 if __name__ == '__main__':
-    # O Render usa a porta 10000 por padrão
+    # O Render utiliza a porta 10000 por padrão para serviços web
     app.run(host='0.0.0.0', port=10000)
