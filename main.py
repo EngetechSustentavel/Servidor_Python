@@ -23,7 +23,7 @@ def convert():
         
         doc_out = ezdxf.new('R2010')
         
-        # DEFINIÇÃO DO BLOCO SIG_PONTO
+        # DEFINIÇÃO DO BLOCO
         blk = doc_out.blocks.new(name='SIG_PONTO')
         blk.add_circle((0, 0), radius=0.2)
         blk.add_line((-0.3, 0), (0.3, 0))
@@ -34,29 +34,29 @@ def convert():
         pontos = msp_in.query('POINT')
         textos = msp_in.query('TEXT')
         
-        # CONTADOR PARA PONTOS SEM TEXTO PRÓXIMO
-        contador_sequencial = 1
+        # O SEGREDO: Contador inicializado fora do loop principal
+        contador_p = 1
         
         for p in pontos:
             px, py = p.dxf.location.x, p.dxf.location.y
-            id_encontrado = None
+            id_final = "" # Reseta para cada ponto
             
-            # 1. TENTA ENCONTRAR TEXTO PRÓXIMO (Raio de 3m)
+            # Busca texto num raio de 3 metros
+            encontrou_texto = False
             for t in textos:
                 tx, ty = t.dxf.insert.x, t.dxf.insert.y
-                distancia = math.sqrt((px-tx)**2 + (py-ty)**2)
-                if distancia < 3.0:
-                    id_encontrado = t.dxf.text
+                dist = math.sqrt((px-tx)**2 + (py-ty)**2)
+                if dist < 3.0:
+                    id_final = str(t.dxf.text).strip()
+                    encontrou_texto = True
                     break
             
-            # 2. SE NÃO ENCONTROU TEXTO, USA A SEQUÊNCIA (P1, P2, P3...)
-            if id_encontrado is None:
-                id_final = f"P{contador_sequencial}"
-                contador_sequencial += 1
-            else:
-                id_final = id_encontrado
+            # Se após checar todos os textos não encontrou nada...
+            if not encontrou_texto or id_final == "":
+                id_final = f"P{contador_p}"
+                contador_p += 1 # Incrementa para o próximo solitário
             
-            # INSERÇÃO DO BLOCO COM O ID DEFINIDO
+            # Insere no AutoCAD
             block_ref = msp_out.add_blockref('SIG_PONTO', (px, py), dxfattribs={'layer': 'VERTICES_ENGETECH'})
             block_ref.add_auto_attribs({'ID': id_final})
             
