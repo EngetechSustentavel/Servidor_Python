@@ -1,0 +1,51 @@
+from flask import Flask, request, send_file
+import ezdxf
+import math
+import os
+
+app = Flask(__name__)
+
+@app.route('/convert', methods=['POST'])
+def convert():
+    if 'dxf_file' not in request.files:
+        return "Nenhum arquivo enviado", 400
+        
+    file = request.files['dxf_file']
+    input_path = "temp_in.dxf"
+    output_path = "temp_out.dxf"
+    file.save(input_path)
+
+    try:
+        doc_in = ezdxf.readfile(input_path)
+        msp_in = doc_in.modelspace()
+        
+        doc_out = ezdxf.new('R2010')
+        # Criação da definição do Bloco SIG_PONTO
+        blk = doc_out.blocks.new(name='SIG_PONTO')
+        blk.add_circle((0, 0), radius=0.2)
+        blk.add_line((-0.3, 0), (0.3, 0))
+        blk.add_line((0, -0.3), (0, 0.3))
+        # Adiciona o atributo ID que você solicitou
+        blk.add_attdef(tag='ID', text='ID', insert=(0.4, 0.4), dxfattribs={'height': 0.3})
+        
+        msp_out = doc_out.modelspace()
+        pontos = msp_in.query('POINT')
+        textos = msp_in.query('TEXT')
+        
+        for p in pontos:
+            px, py = p.dxf.location.x, p.dxf.location.y
+            id_val = "P" # Padrão se não houver texto próximo
+            for t in textos:
+                tx, ty = t.dxf.insert.x, t.dxf.insert.y
+                if math.sqrt((px-tx)**2 + (py-ty)**2) < 3.0:
+                    id_val = t.dxf.text
+                    break
+            
+            # Insere o Bloco real e preenche o atributo
+            block_ref = msp_out.add_blockref('SIG_PONTO', (px, py))
+            block_ref.add_auto_attribs({'ID': id_val})
+            
+        doc_out.saveas(output_path)
+        return send_file(output_path, as_attachment=True, download_name="Engetech_Master_Pro.dxf")
+    finally:
+        if os.path.exists(input_path): os.remove(input_path)
