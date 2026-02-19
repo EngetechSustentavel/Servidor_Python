@@ -9,8 +9,8 @@ from pyproj import Transformer
 app = Flask(__name__)
 CORS(app)
 
-# --- UTILITÁRIOS DE GEOPROCESSAMENTO ---
-# Configurado para SIRGAS 2000 / UTM Zone 24S (Bahia/Nordeste)
+# --- CONFIGURAÇÃO DE COORDENADAS (SIRGAS 2000 / UTM 24S) ---
+# Usamos EPSG:4674 para SIRGAS 2000 Geográfico e EPSG:31984 para UTM 24S
 transformer = Transformer.from_crs("epsg:4674", "epsg:31984", always_xy=True)
 
 def converter_para_utm(lat, lon):
@@ -19,7 +19,7 @@ def converter_para_utm(lat, lon):
     except:
         return None
 
-# --- ROTA 1: GEOCONVERTER (JÁ VALIDADA) ---
+# --- ROTA 1: GEOCONVERTER (FERRAMENTA 100% OK) ---
 @app.route('/convert', methods=['POST'])
 def convert():
     if 'dxf_file' not in request.files:
@@ -74,35 +74,48 @@ def convert():
 # --- ROTA 2: GEOEXTRATOR (NOVA FERRAMENTA) ---
 @app.route('/extract_text', methods=['POST'])
 def extract_text():
-    data = request.json
-    texto_memorial = data.get('texto', '')
+    data = request.get_json()
+    texto = data.get('texto', '')
     
-    # Lógica de extração simplificada (Regex para capturar coordenadas)
-    # Suporta UTM (E/N) e Lat/Long decimais
+    # Busca por pares de números (UTM ou Lat/Long)
+    padrao = re.findall(r"(-?\d[\d\.]*?\d,\d+|-?\d+\.\d+)", texto)
+    
     vertices = []
+    temp_coords = []
     
-    # Exemplo de captura para UTM
-    utm_pattern = r"E=([\d\.,]+).*?N=([\d\.,]+)"
-    matches = re.findall(utm_pattern, texto_memorial)
+    for num in padrao:
+        # Normaliza: remove pontos de milhar e troca vírgula por ponto decimal
+        limpo = float(num.replace('.', '').replace(',', '.')) if ',' in num else float(num)
+        temp_coords.append(limpo)
     
-    for m in matches:
-        e = float(m[0].replace('.', '').replace(',', '.'))
-        n = float(m[1].replace('.', '').replace(',', '.'))
-        vertices.append((e, n))
+    # Agrupa em pares X e Y
+    for i in range(0, len(temp_coords) - 1, 2):
+        x, y = temp_coords[i], temp_coords[i+1]
+        
+        # Se for Lat/Long (números pequenos), converte para UTM
+        if abs(x) < 180 and abs(y) < 180:
+            utm = converter_para_utm(x, y) # lat, lon
+            if utm: vertices.append(utm)
+        else:
+            vertices.append((x, y))
 
     if not vertices:
-        return jsonify({"erro": "Nenhuma coordenada identificada no texto"}), 400
+        return "Erro: Nenhuma coordenada identificada no texto.", 400
 
-    # Gera o DXF da Poligonal
-    output_path = "extracao_engetech.dxf"
+    output_path = "Engetech_Extracao.dxf"
     doc = ezdxf.new('R2010')
     msp = doc.modelspace()
     
-    # Cria a Poligonal Fechada
-    msp.add_lwpolyline(vertices, dxfattribs={'closed': True, 'layer': 'POLIGONAL_EXTRAIDA', 'color': 1})
+    # Desenha a poligonal e identifica os vértices
+    msp.add_lwpolyline(vertices, dxfattribs={'closed': True, 'layer': 'POLIGONAL_ENGETECH', 'color': 1})
+    
+    for i, v in enumerate(vertices):
+        msp.add_circle(v, radius=1.0, dxfattribs={'layer': 'VERTICES'})
+        msp.add_text(f"V{i+1}", dxfattribs={'height': 1.5}).set_placement(v)
     
     doc.saveas(output_path)
     return send_file(output_path, as_attachment=True, download_name="Engetech_Poligonal.dxf")
 
 if __name__ == '__main__':
+    # O Render usa a porta 10000 por padrão
     app.run(host='0.0.0.0', port=10000)
